@@ -1,0 +1,179 @@
+<!doctype html>
+<meta charset='UTF-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<script src='js/three.min.js'></script>
+<!--<script src="js/vue.js"></script>-->
+<script src="js/vue.min.js"></script>
+<script type="x-shader/x-vertex" id="vertexShader">
+varying vec2 vUv;
+
+void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+</script>
+<script type="x-shader/x-fragment" id="fragmentShader">
+varying vec2 vUv;
+uniform float f;
+uniform vec4 a;
+uniform vec4 r;
+
+mat2 rot(float theta) {
+    theta = acos(-1.)*(theta+0.5);
+    return mat2(
+        cos(theta), -sin(theta),
+        sin(theta),  cos(theta)
+    );
+}
+
+void main() {
+    vec2 position = vUv - vec2(0.5, 0.5);
+
+    vec2 cxy = rot(r.x)*position;
+    vec2 mxy = rot(r.y)*position;
+    vec2 yxy = rot(r.z)*position;
+    vec2 kxy = rot(r.w)*position;
+
+    int bit = 0;
+    if(sin(cxy.x*f)*sin(cxy.y*f)*0.5+0.5 <= a.x) bit += 1;
+    if(sin(mxy.x*f)*sin(mxy.y*f)*0.5+0.5 <= a.y) bit += 2;
+    if(sin(yxy.x*f)*sin(yxy.y*f)*0.5+0.5 <= a.z) bit += 4;
+    if(sin(kxy.x*f)*sin(kxy.y*f)*0.5+0.5 <= a.w) bit += 8;
+
+    gl_FragColor = vec4(1, 1, 1, 1);
+    if(bit == 1) gl_FragColor = vec4(0, 1, 1, 1);   // c
+    if(bit == 2) gl_FragColor = vec4(1, 0, 1, 1);   // m
+    if(bit == 3) gl_FragColor = vec4(0, 0, 1, 1);   // c+m
+    if(bit == 4) gl_FragColor = vec4(1, 1, 0, 1);   // y
+    if(bit == 5) gl_FragColor = vec4(0, 1, 0, 1);   // y+c
+    if(bit == 6) gl_FragColor = vec4(1, 0, 0, 1);   // y+m
+    if(bit >= 7) gl_FragColor = vec4(0, 0, 0, 1);   // k+*
+}
+</script>
+
+<h1>Halftone</h1>
+
+<div id="app">
+    <div style="float: left">
+        <canvas id="canvas" height="1000" width="1000" style="height: 500px; width: 500px;"></canvas>
+    </div>
+    <div>
+        <h3>Frequency</h3>
+        <input type='range' min='1' max='600' step='any' v-model='uniforms.f.value'></input>
+        <br>
+        <h3>C</h3>
+        <input type='range' min='0' max='1' step='any' v-model='uniforms.a.value.x'></input>
+        <input type='range' min='0' max='0.5' step='any' v-model='uniforms.r.value.x'></input>
+        <br>
+        <h3>M</h3>
+        <input type='range' min='0' max='1' step='any' v-model='uniforms.a.value.y'></input>
+        <input type='range' min='0' max='0.5' step='any' v-model='uniforms.r.value.y'></input>
+        <h3>Y</h3>
+        <input type='range' min='0' max='1' step='any' v-model='uniforms.a.value.z'></input>
+        <input type='range' min='0' max='0.5' step='any' v-model='uniforms.r.value.z'></input>
+        <h3>K</h3>
+        <input type='range' min='0' max='1' step='any' v-model='uniforms.a.value.w'></input>
+        <input type='range' min='0' max='0.5' step='any' v-model='uniforms.r.value.w'></input>
+        <h3>RGB</h3>
+        <input type='color' v-model='color'></input>
+    </div>
+    <div style="clear: both"></div>
+</div>
+
+<script>
+
+function rgb2cmyk(rgb) {
+    var r = parseInt(rgb.substr(1, 2), 16)/255;
+    var g = parseInt(rgb.substr(3, 2), 16)/255;
+    var b = parseInt(rgb.substr(5, 2), 16)/255;
+
+    var k = Math.min(1-r, 1-g, 1-b);
+
+    if(k == 1) return {c: 0, m: 0, u: 0, k: 1};
+
+    return {
+        c: (1-r-k)/(1-k),
+        m: (1-g-k)/(1-k),
+        y: (1-b-k)/(1-k),
+        k: k,
+    };
+}
+
+function cmyk2rgb(cmyk) {
+    var r = 1-Math.min(1, cmyk.c*(1-cmyk.k)+cmyk.k);
+    var g = 1-Math.min(1, cmyk.m*(1-cmyk.k)+cmyk.k);
+    var b = 1-Math.min(1, cmyk.y*(1-cmyk.k)+cmyk.k);
+
+    r = Math.round(r*255);
+    g = Math.round(g*255);
+    b = Math.round(b*255);
+
+    return "#"+r.toString(16).padStart(2, "0")+
+               g.toString(16).padStart(2, "0")+
+               b.toString(16).padStart(2, "0");
+}
+
+var app = new Vue({
+    el: "#app",
+    data: {
+        uniforms: {
+            f: {type: "f", value: 100},
+            a: {type: "v4", value: new THREE.Vector4(0.3, 0.3, 0.3, 0.1)},
+            r: {type: "v4", value: new THREE.Vector4(15/180, 75/180, 0, 45/180)},
+        },
+        canvas:     undefined,
+        renderer:   undefined,
+        scene:      undefined,
+        camera:     undefined,
+        shaderMaterial: undefined,
+        color:      "#69b674",
+    },
+    mounted: function() {
+        this.canvas = document.getElementById("canvas");
+        this.renderer = new THREE.WebGLRenderer({canvas: this.canvas});
+        this.scene = new THREE.Scene();
+        this.camera = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, -10000, 10000);
+        this.camera.position.z = 100;
+        this.scene.add(this.camera);
+
+        this.shaderMaterial = new THREE.ShaderMaterial({
+            uniforms: this.uniforms, 
+            vertexShader: document.getElementById('vertexShader').textContent,
+            fragmentShader: document.getElementById('fragmentShader').textContent,
+        });
+
+        var plane = new THREE.PlaneGeometry(1.0, 1.0);
+        screenQ = new THREE.Mesh(plane, this.shaderMaterial)
+        this.scene.add(screenQ);
+
+        this.animate();
+    },
+    methods: {
+        animate: function() {
+            requestAnimationFrame( this.animate );
+            this.renderer.render( this.scene, this.camera );
+        }
+    },
+    watch: {
+        color: function(val) {
+            var cmyk = rgb2cmyk(val);
+            this.uniforms.a.value.x = cmyk.c;
+            this.uniforms.a.value.y = cmyk.m;
+            this.uniforms.a.value.z = cmyk.y;
+            this.uniforms.a.value.w = cmyk.k;
+        },
+//        uniforms: {
+//            deep: true,
+//            handler(val) {
+//                var cmyk = {
+//                    c: parseFloat(val.a.value.x),
+//                    m: parseFloat(val.a.value.y),
+//                    y: parseFloat(val.a.value.z),
+//                    k: parseFloat(val.a.value.w),
+//                }
+//                this.color = cmyk2rgb(cmyk);
+//            },
+//        },
+    }
+});
+</script>
